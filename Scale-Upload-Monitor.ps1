@@ -253,6 +253,7 @@ function Show-ScaleMonitorConfigWindow {
 
     $startHandler = {
         $errorTextBlock.Text = ""
+        $errorTextBlock.Foreground = 'Red'
 
         $provider = & $getProviderName
         $ip   = $clusterIpBox.Text.Trim()
@@ -327,6 +328,24 @@ function Show-ScaleMonitorConfigWindow {
                     $smtp2GoSecure = $null
                 }
             }
+        }
+
+        # Test cluster login before saving and starting monitoring
+        try {
+            if (-not ("TrustAllCertsPolicy" -as [type])) {
+                add-type "using System.Net; using System.Security.Cryptography.X509Certificates; public class TrustAllCertsPolicy : ICertificatePolicy { public bool CheckValidationResult(ServicePoint srvPoint, X509Certificate certificate, WebRequest request, int certificateProblem) { return true; } }"
+            }
+            [System.Net.ServicePointManager]::CertificatePolicy = New-Object TrustAllCertsPolicy
+            [System.Net.ServicePointManager]::SecurityProtocol = [System.Net.SecurityProtocolType]::Tls12
+
+            $base64AuthInfo = [Convert]::ToBase64String([Text.Encoding]::ASCII.GetBytes(("{0}:{1}" -f $clusterCred.UserName, $clusterCred.GetNetworkCredential().Password)))
+            $headers = @{ Authorization = ("Basic {0}" -f $base64AuthInfo) }
+            $testUrl = "https://$ip/rest/v1/VirtualDisk"
+
+            Invoke-RestMethod -Uri $testUrl -Method Get -Headers $headers -ErrorAction Stop | Out-Null
+        } catch {
+            $errorTextBlock.Text = "Cluster login test failed: $($_.Exception.Message)"
+            return
         }
 
         $script:ConfigResult = [pscustomobject]@{
