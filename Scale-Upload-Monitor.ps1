@@ -693,6 +693,7 @@ function New-MonitorWindow {
         $e.Handled = $true
     })
 
+    $statusTextBox.Text = "Initializing... Please wait for first API response."
     $window.Show()
 
     $script:MonitorWindow     = $window
@@ -713,8 +714,20 @@ $url = "https://$targetIP/rest/v1/VirtualDisk"
 # Create monitoring window and show basic info
 New-MonitorWindow -TargetIP $targetIP -ApiUrl $url
 
+# Update status so user sees activity immediately (email can take a moment)
+if ($script:MonitorStatusBox) {
+    $script:MonitorStatusBox.Text = "Sending startup notification email... Then connecting to cluster for first status."
+    $script:MonitorStatusBox.ScrollToEnd()
+}
+[System.Windows.Forms.Application]::DoEvents()
+
 # Send a "monitoring started" email so you know it's running
 Send-SmtpNotification -Subject "Scale Upload Monitoring Started ($targetIP)" -Body "Scale Upload Monitor has started watching uploads on cluster $targetIP.`n`nAPI URL: $url`nTimestamp: $(Get-Date)"
+
+if ($script:MonitorStatusBox) {
+    $script:MonitorStatusBox.Text = "Connecting to cluster for first status..."
+    [System.Windows.Forms.Application]::DoEvents()
+}
 
 while ($true) {
     try {
@@ -798,7 +811,7 @@ while ($true) {
                 }
 
                 $statusBase = "$currentGB GB / $totalGB GB ($percent%)"
-                $status = if ($etaText) { "$statusBase - $etaText" } else { $statusBase }
+                $status = if ($etaText) { "$statusBase - $etaText" } else { "$statusBase - Calculating ETA..." }
 
                 $statusLines += "$name : $status"
 
