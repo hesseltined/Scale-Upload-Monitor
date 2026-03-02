@@ -79,6 +79,20 @@ function Show-ScaleMonitorConfigWindow {
           </StackPanel>
         </GroupBox>
 
+        <!-- Email provider selection -->
+        <GroupBox Header="Email Provider" Margin="0,0,0,10">
+          <StackPanel Margin="8">
+            <TextBlock Text="Choose a common provider to auto-fill typical SMTP settings, or select Generic to enter everything manually." TextWrapping="Wrap" Margin="0,0,0,8" />
+            <StackPanel Orientation="Horizontal">
+              <RadioButton Name="ProviderGenericRadio" Content="Generic" Margin="0,0,10,0" IsChecked="True" />
+              <RadioButton Name="ProviderOffice365Radio" Content="Office 365" Margin="0,0,10,0" />
+              <RadioButton Name="ProviderGmailRadio" Content="Gmail" Margin="0,0,10,0" />
+              <RadioButton Name="ProviderZohoRadio" Content="Zoho" Margin="0,0,10,0" />
+              <RadioButton Name="ProviderSmtp2GoRadio" Content="SMTP2GO" />
+            </StackPanel>
+          </StackPanel>
+        </GroupBox>
+
         <!-- Email / SMTP settings -->
         <GroupBox Header="Email / SMTP Settings" Margin="0,0,0,10">
           <StackPanel Margin="8">
@@ -101,6 +115,10 @@ function Show-ScaleMonitorConfigWindow {
 
             <TextBlock Text="SMTP password:" />
             <PasswordBox Name="SmtpPasswordBox" Margin="0,0,0,8" />
+
+            <TextBlock Text="For SMTP2GO you can alternatively use an API key instead of SMTP username/password. If an API key is entered, the password field will be ignored for sending via the API." TextWrapping="Wrap" Margin="0,4,0,4" />
+            <TextBlock Text="SMTP2GO API key (only used when provider is SMTP2GO):" />
+            <PasswordBox Name="Smtp2GoApiKeyBox" Margin="0,0,0,8" />
           </StackPanel>
         </GroupBox>
 
@@ -118,6 +136,7 @@ function Show-ScaleMonitorConfigWindow {
     </ScrollViewer>
 
     <StackPanel Grid.Row="1" Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,10,0,0">
+      <Button Name="TestEmailButton" Content="Test Email" Width="110" Margin="0,0,8,0" />
       <Button Name="StartButton" Content="Start Monitoring" Width="140" Margin="0,0,8,0" IsDefault="True" />
       <Button Name="CancelButton" Content="Cancel" Width="80" IsCancel="True" />
     </StackPanel>
@@ -130,6 +149,11 @@ function Show-ScaleMonitorConfigWindow {
     $window = [Windows.Markup.XamlReader]::Load($reader)
 
     # Grab controls
+    $providerGenericRadio = $window.FindName("ProviderGenericRadio")
+    $providerOffice365Radio = $window.FindName("ProviderOffice365Radio")
+    $providerGmailRadio = $window.FindName("ProviderGmailRadio")
+    $providerZohoRadio = $window.FindName("ProviderZohoRadio")
+    $providerSmtp2GoRadio = $window.FindName("ProviderSmtp2GoRadio")
     $clusterIpBox        = $window.FindName("ClusterIpBox")
     $clusterUserBox      = $window.FindName("ClusterUserBox")
     $clusterPasswordBox  = $window.FindName("ClusterPasswordBox")
@@ -140,10 +164,49 @@ function Show-ScaleMonitorConfigWindow {
     $smtpUseSslCheck     = $window.FindName("SmtpUseSslCheck")
     $smtpUserBox         = $window.FindName("SmtpUserBox")
     $smtpPasswordBox     = $window.FindName("SmtpPasswordBox")
+    $smtp2GoApiKeyBox    = $window.FindName("Smtp2GoApiKeyBox")
     $notificationBox     = $window.FindName("NotificationIntervalBox")
     $errorTextBlock      = $window.FindName("ErrorText")
+    $testEmailButton     = $window.FindName("TestEmailButton")
     $startButton         = $window.FindName("StartButton")
     $cancelButton        = $window.FindName("CancelButton")
+
+    # Helper to determine provider name based on selected radio
+    $getProviderName = {
+        if ($providerOffice365Radio.IsChecked) { return "Office365" }
+        if ($providerGmailRadio.IsChecked)     { return "Gmail" }
+        if ($providerZohoRadio.IsChecked)      { return "Zoho" }
+        if ($providerSmtp2GoRadio.IsChecked)   { return "SMTP2GO" }
+        return "Generic"
+    }
+
+    # Helper to apply reasonable defaults when switching providers (only if fields are empty)
+    $updateProviderDefaults = {
+        $prov = & $getProviderName
+        switch ($prov) {
+            "Office365" {
+                if (-not $smtpServerBox.Text) { $smtpServerBox.Text = "smtp.office365.com" }
+                if (-not $smtpPortBox.Text)   { $smtpPortBox.Text   = "587" }
+                $smtpUseSslCheck.IsChecked = $true
+            }
+            "Gmail" {
+                if (-not $smtpServerBox.Text) { $smtpServerBox.Text = "smtp.gmail.com" }
+                if (-not $smtpPortBox.Text)   { $smtpPortBox.Text   = "587" }
+                $smtpUseSslCheck.IsChecked = $true
+            }
+            "Zoho" {
+                if (-not $smtpServerBox.Text) { $smtpServerBox.Text = "smtp.zoho.com" }
+                if (-not $smtpPortBox.Text)   { $smtpPortBox.Text   = "587" }
+                $smtpUseSslCheck.IsChecked = $true
+            }
+            "SMTP2GO" {
+                if (-not $smtpServerBox.Text) { $smtpServerBox.Text = "mail.smtp2go.com" }
+                if (-not $smtpPortBox.Text)   { $smtpPortBox.Text   = "2525" }
+                $smtpUseSslCheck.IsChecked = $true
+            }
+            default { }
+        }
+    }
 
     # Pre-populate from saved settings if available
     if ($SavedSettings) {
@@ -156,17 +219,42 @@ function Show-ScaleMonitorConfigWindow {
         if ($SavedSettings.SmtpUseSsl -ne $null) { $smtpUseSslCheck.IsChecked = [bool]$SavedSettings.SmtpUseSsl }
         if ($SavedSettings.SmtpUsername)       { $smtpUserBox.Text         = $SavedSettings.SmtpUsername }
         if ($SavedSettings.NotificationGbInterval) { $notificationBox.Text = [string]$SavedSettings.NotificationGbInterval }
+        if ($SavedSettings.EmailProvider) {
+            switch ($SavedSettings.EmailProvider) {
+                "Office365" { $providerOffice365Radio.IsChecked = $true }
+                "Gmail"     { $providerGmailRadio.IsChecked     = $true }
+                "Zoho"      { $providerZohoRadio.IsChecked      = $true }
+                "SMTP2GO"   { $providerSmtp2GoRadio.IsChecked   = $true }
+                default     { $providerGenericRadio.IsChecked   = $true }
+            }
+        } else {
+            $providerGenericRadio.IsChecked = $true
+        }
+
+        # For SMTP2GO, if an API key is already stored, prefer API mode and visually de-emphasize password entry
+        if ($SavedSettings.EmailProvider -eq "SMTP2GO" -and $SavedSettings.Smtp2GoApiKeyEnc) {
+            $smtpPasswordBox.IsEnabled = $false
+        }
     }
 
     # Provide sensible defaults if boxes are empty
     if (-not $smtpPortBox.Text)       { $smtpPortBox.Text = "587" }
     if (-not $notificationBox.Text)   { $notificationBox.Text = "10" }
+    & $updateProviderDefaults
+
+    # Hook provider selection changes to update defaults
+    $null = $providerGenericRadio.Add_Checked({ & $updateProviderDefaults })
+    $null = $providerOffice365Radio.Add_Checked({ & $updateProviderDefaults })
+    $null = $providerGmailRadio.Add_Checked({ & $updateProviderDefaults })
+    $null = $providerZohoRadio.Add_Checked({ & $updateProviderDefaults })
+    $null = $providerSmtp2GoRadio.Add_Checked({ & $updateProviderDefaults })
 
     $script:ConfigResult = $null
 
     $startHandler = {
         $errorTextBlock.Text = ""
 
+        $provider = & $getProviderName
         $ip   = $clusterIpBox.Text.Trim()
         $user = $clusterUserBox.Text.Trim()
         $cPwd = $clusterPasswordBox.Password
@@ -176,6 +264,7 @@ function Show-ScaleMonitorConfigWindow {
         $sPortText = $smtpPortBox.Text.Trim()
         $sUser = $smtpUserBox.Text.Trim()
         $sPwd  = $smtpPasswordBox.Password
+        $apiKeyPlain = $smtp2GoApiKeyBox.Password
         $notifText = $notificationBox.Text.Trim()
 
         if ([string]::IsNullOrWhiteSpace($ip))   { $errorTextBlock.Text = "Cluster IP/hostname is required."; return }
@@ -185,7 +274,19 @@ function Show-ScaleMonitorConfigWindow {
         if ([string]::IsNullOrWhiteSpace($to))   { $errorTextBlock.Text = "Recipient email address is required."; return }
         if ([string]::IsNullOrWhiteSpace($sSrv)) { $errorTextBlock.Text = "SMTP server hostname is required."; return }
         if ([string]::IsNullOrWhiteSpace($sUser)){ $errorTextBlock.Text = "SMTP username is required."; return }
-        if ([string]::IsNullOrWhiteSpace($sPwd)) { $errorTextBlock.Text = "SMTP password is required."; return }
+
+        # For SMTP2GO we allow either SMTP user/password or API key. For all other providers, password is required.
+        if ($provider -eq "SMTP2GO") {
+            if ([string]::IsNullOrWhiteSpace($sPwd) -and -not $SavedSettings.SmtpPasswordEnc -and [string]::IsNullOrWhiteSpace($apiKeyPlain) -and -not $SavedSettings.Smtp2GoApiKeyEnc) {
+                $errorTextBlock.Text = "For SMTP2GO, enter either an SMTP password or an API key."
+                return
+            }
+        } else {
+            if ([string]::IsNullOrWhiteSpace($sPwd) -and -not $SavedSettings.SmtpPasswordEnc) {
+                $errorTextBlock.Text = "SMTP password is required."
+                return
+            }
+        }
 
         $portVal = 0
         if (-not [int]::TryParse($sPortText, [ref]$portVal) -or $portVal -le 0) {
@@ -201,10 +302,36 @@ function Show-ScaleMonitorConfigWindow {
         $clusterSecure = $cPwd | ConvertTo-SecureString -AsPlainText -Force
         $clusterCred   = New-Object System.Management.Automation.PSCredential($user, $clusterSecure)
 
-        $smtpSecure    = $sPwd | ConvertTo-SecureString -AsPlainText -Force
+        # SMTP password: prefer what user entered; if blank, reuse saved encrypted password if present
+        $smtpSecure = $null
+        if (-not [string]::IsNullOrWhiteSpace($sPwd)) {
+            $smtpSecure = $sPwd | ConvertTo-SecureString -AsPlainText -Force
+        } elseif ($SavedSettings.SmtpPasswordEnc) {
+            try {
+                $smtpSecure = ConvertTo-SecureString $SavedSettings.SmtpPasswordEnc -ErrorAction Stop
+            } catch {
+                $smtpSecure = $null
+            }
+        }
+
+        # SMTP2GO API key (optional)
+        $smtp2GoSecure = $null
+        if ($provider -eq "SMTP2GO") {
+            if (-not [string]::IsNullOrWhiteSpace($apiKeyPlain)) {
+                $smtp2GoSecure = $apiKeyPlain | ConvertTo-SecureString -AsPlainText -Force
+                # if using API key this run, no need to keep SMTP password mandatory
+            } elseif ($SavedSettings.Smtp2GoApiKeyEnc) {
+                try {
+                    $smtp2GoSecure = ConvertTo-SecureString $SavedSettings.Smtp2GoApiKeyEnc -ErrorAction Stop
+                } catch {
+                    $smtp2GoSecure = $null
+                }
+            }
+        }
 
         $script:ConfigResult = [pscustomobject]@{
             TargetIP               = $ip
+            EmailProvider          = $provider
             ClusterCredential      = $clusterCred
             EmailFrom              = $from
             EmailTo                = $to
@@ -213,6 +340,7 @@ function Show-ScaleMonitorConfigWindow {
             SmtpUseSsl             = [bool]$smtpUseSslCheck.IsChecked
             SmtpUsername           = $sUser
             SmtpPassword           = $smtpSecure
+            Smtp2GoApiKey          = $smtp2GoSecure
             NotificationGbInterval = $notifVal
         }
 
@@ -221,6 +349,85 @@ function Show-ScaleMonitorConfigWindow {
     }
 
     $null = $startButton.Add_Click($startHandler)
+
+    # Test email handler: allows verifying SMTP / API settings before starting monitoring
+    $testHandler = {
+        $errorTextBlock.Text = ""
+
+        $provider = & $getProviderName
+        $from = $emailFromBox.Text.Trim()
+        $to   = $emailToBox.Text.Trim()
+        $sSrv = $smtpServerBox.Text.Trim()
+        $sPortText = $smtpPortBox.Text.Trim()
+        $sUser = $smtpUserBox.Text.Trim()
+        $sPwd  = $smtpPasswordBox.Password
+        $apiKeyPlain = $smtp2GoApiKeyBox.Password
+
+        if ([string]::IsNullOrWhiteSpace($from)) { $errorTextBlock.Text = "Sender email address is required for test email."; return }
+        if ([string]::IsNullOrWhiteSpace($to))   { $errorTextBlock.Text = "Recipient email address is required for test email."; return }
+        if ([string]::IsNullOrWhiteSpace($sSrv)) { $errorTextBlock.Text = "SMTP server hostname is required for test email."; return }
+
+        $portVal = 0
+        if (-not [int]::TryParse($sPortText, [ref]$portVal) -or $portVal -le 0) {
+            $errorTextBlock.Text = "SMTP port must be a positive number (e.g. 587)."
+            return
+        }
+
+        $useApi = $false
+        if ($provider -eq "SMTP2GO" -and -not [string]::IsNullOrWhiteSpace($apiKeyPlain)) {
+            $useApi = $true
+        }
+
+        try {
+            if ($useApi) {
+                $headers = @{
+                    "Content-Type"      = "application/json"
+                    "X-Smtp2go-Api-Key" = $apiKeyPlain
+                }
+                $bodyObj = @{
+                    sender    = $from
+                    to        = @($to)
+                    subject   = "SMTP2GO API Test from Scale Upload Monitor"
+                    text_body = "This is a test email sent via the SMTP2GO API from the Scale Upload Monitor configuration window.`n`nTimestamp: $(Get-Date)"
+                } | ConvertTo-Json
+
+                $response = Invoke-RestMethod -Uri "https://api.smtp2go.com/v3/email/send" -Method Post -Headers $headers -Body $bodyObj -ErrorAction Stop
+                if ($response.data.succeeded -ne 1 -and -not $response.data.email_id) {
+                    $msg = if ($response.data.error) { $response.data.error } else { "Unknown SMTP2GO API response" }
+                    throw "SMTP2GO API error: $msg"
+                }
+            } else {
+                if ([string]::IsNullOrWhiteSpace($sUser)) { throw "SMTP username is required for test email." }
+                if ([string]::IsNullOrWhiteSpace($sPwd) -and -not $SavedSettings.SmtpPasswordEnc) { throw "SMTP password is required for test email." }
+
+                $smtpSecure = $null
+                if (-not [string]::IsNullOrWhiteSpace($sPwd)) {
+                    $smtpSecure = $sPwd | ConvertTo-SecureString -AsPlainText -Force
+                } elseif ($SavedSettings.SmtpPasswordEnc) {
+                    $smtpSecure = ConvertTo-SecureString $SavedSettings.SmtpPasswordEnc
+                }
+
+                $creds = New-Object System.Management.Automation.PSCredential($sUser, $smtpSecure)
+
+                Send-MailMessage -From $from `
+                                 -To $to `
+                                 -Subject "SMTP Test from Scale Upload Monitor" `
+                                 -Body "This is a test email sent via SMTP from the Scale Upload Monitor configuration window.`n`nTimestamp: $(Get-Date)" `
+                                 -SmtpServer $sSrv `
+                                 -Port $portVal `
+                                 -UseSsl:$smtpUseSslCheck.IsChecked `
+                                 -Credential $creds `
+                                 -ErrorAction Stop
+            }
+            $errorTextBlock.Foreground = 'Green'
+            $errorTextBlock.Text = "Test email sent successfully."
+        } catch {
+            $errorTextBlock.Foreground = 'Red'
+            $errorTextBlock.Text = "Test email failed: $($_.Exception.Message)"
+        }
+    }
+
+    $null = $testEmailButton.Add_Click($testHandler)
 
     # Simple handler for cancel
     $null = $cancelButton.Add_Click({
@@ -242,6 +449,7 @@ if (-not $config) {
 
 # Extract config values into variables used by the rest of the script
 $targetIP              = $config.TargetIP
+$emailProvider         = $config.EmailProvider
 $clusterCred           = $config.ClusterCredential
 $emailFrom             = $config.EmailFrom
 $emailTo               = $config.EmailTo
@@ -250,6 +458,7 @@ $smtpPort              = $config.SmtpPort
 $smtpUseSsl            = $config.SmtpUseSsl
 $smtpUser              = $config.SmtpUsername
 $smtpPassword          = $config.SmtpPassword
+$smtp2GoApiKey         = $config.Smtp2GoApiKey
 $notificationGbInterval = $config.NotificationGbInterval
 if ($notificationGbInterval -le 0) { $notificationGbInterval = 10 }
 
@@ -258,6 +467,7 @@ $settingsToSave = [pscustomobject]@{
     TargetIP               = $targetIP
     Username               = $clusterCred.UserName
     PasswordEnc            = $clusterCred.Password | ConvertFrom-SecureString
+    EmailProvider          = $emailProvider
     EmailFrom              = $emailFrom
     EmailTo                = $emailTo
     SmtpServer             = $smtpServer
@@ -265,35 +475,70 @@ $settingsToSave = [pscustomobject]@{
     SmtpUseSsl             = $smtpUseSsl
     SmtpUsername           = $smtpUser
     SmtpPasswordEnc        = $smtpPassword | ConvertFrom-SecureString
+    Smtp2GoApiKeyEnc       = if ($smtp2GoApiKey) { $smtp2GoApiKey | ConvertFrom-SecureString } else { $null }
     NotificationGbInterval = $notificationGbInterval
 }
 $settingsToSave | ConvertTo-Json | Set-Content -Path $configPath
 
 # ---------------------------------------------------------
-# EMAIL FUNCTION (generic SMTP provider via Send-MailMessage)
+# EMAIL FUNCTION (supports generic SMTP and SMTP2GO API)
 # ---------------------------------------------------------
 function Send-SmtpNotification {
     param([string]$Subject, [string]$Body)
 
-    if ($null -eq $smtpPassword -or [string]::IsNullOrWhiteSpace($smtpServer)) {
-        Write-Host "[Email Error] SMTP settings are incomplete. Cannot send notification." -ForegroundColor Red
-        return
-    }
-
     try {
-        $creds = New-Object System.Management.Automation.PSCredential($smtpUser, $smtpPassword)
+        $provider = if ($emailProvider) { $emailProvider } else { "Generic" }
 
-        Send-MailMessage -From $emailFrom `
-                         -To $emailTo `
-                         -Subject $Subject `
-                         -Body $Body `
-                         -SmtpServer $smtpServer `
-                         -Port $smtpPort `
-                         -UseSsl:$smtpUseSsl `
-                         -Credential $creds `
-                         -ErrorAction Stop
+        # If using SMTP2GO with an API key, prefer the HTTP API for sending
+        if ($provider -eq "SMTP2GO" -and $smtp2GoApiKey) {
+            $plainKey = $null
+            $bstr = [System.Runtime.InteropServices.Marshal]::SecureStringToBSTR($smtp2GoApiKey)
+            try {
+                $plainKey = [System.Runtime.InteropServices.Marshal]::PtrToStringAuto($bstr)
+            } finally {
+                if ($bstr -ne [IntPtr]::Zero) {
+                    [System.Runtime.InteropServices.Marshal]::ZeroFreeBSTR($bstr)
+                }
+            }
 
-        Write-Host "[Email Sent] $Subject" -ForegroundColor Green
+            $apiHeaders = @{
+                "Content-Type"      = "application/json"
+                "X-Smtp2go-Api-Key" = $plainKey
+            }
+            $bodyObj = @{
+                sender    = $emailFrom
+                to        = @($emailTo)
+                subject   = $Subject
+                text_body = $Body
+            } | ConvertTo-Json
+
+            $response = Invoke-RestMethod -Uri "https://api.smtp2go.com/v3/email/send" -Method Post -Headers $apiHeaders -Body $bodyObj -ErrorAction Stop
+            if ($response.data.succeeded -ne 1 -and -not $response.data.email_id) {
+                $msg = if ($response.data.error) { $response.data.error } else { "Unknown SMTP2GO API response" }
+                throw "SMTP2GO API error: $msg"
+            }
+
+            Write-Host "[Email Sent via SMTP2GO API] $Subject" -ForegroundColor Green
+        } else {
+            if ($null -eq $smtpPassword -or [string]::IsNullOrWhiteSpace($smtpServer)) {
+                Write-Host "[Email Error] SMTP settings are incomplete. Cannot send notification." -ForegroundColor Red
+                return
+            }
+
+            $creds = New-Object System.Management.Automation.PSCredential($smtpUser, $smtpPassword)
+
+            Send-MailMessage -From $emailFrom `
+                             -To $emailTo `
+                             -Subject $Subject `
+                             -Body $Body `
+                             -SmtpServer $smtpServer `
+                             -Port $smtpPort `
+                             -UseSsl:$smtpUseSsl `
+                             -Credential $creds `
+                             -ErrorAction Stop
+
+            Write-Host "[Email Sent] $Subject" -ForegroundColor Green
+        }
     } catch {
         $errMsg = $_.Exception.Message
         if ($_.ErrorDetails.Message) { $errMsg = $_.ErrorDetails.Message }
