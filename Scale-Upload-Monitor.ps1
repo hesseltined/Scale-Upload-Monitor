@@ -74,9 +74,8 @@ function Show-ScaleMonitorConfigWindow {
             <TextBlock Text="Cluster username:" />
             <TextBox Name="ClusterUserBox" Margin="0,0,0,8" />
 
-            <TextBlock Text="Cluster password:" />
-            <PasswordBox Name="ClusterPasswordBox" Margin="0,0,0,4" />
-            <TextBlock Name="ClusterPasswordHint" Foreground="Gray" FontStyle="Italic" Margin="0,0,0,8" />
+            <TextBlock Text="Cluster password (will be saved; leave blank next time to reuse):" />
+            <PasswordBox Name="ClusterPasswordBox" Margin="0,0,0,8" />
           </StackPanel>
         </GroupBox>
 
@@ -114,14 +113,12 @@ function Show-ScaleMonitorConfigWindow {
             <TextBlock Text="SMTP username (often the same as sender address):" />
             <TextBox Name="SmtpUserBox" Margin="0,0,0,8" />
 
-            <TextBlock Text="SMTP password:" />
-            <PasswordBox Name="SmtpPasswordBox" Margin="0,0,0,4" />
-            <TextBlock Name="SmtpPasswordHint" Foreground="Gray" FontStyle="Italic" Margin="0,0,0,8" />
+            <TextBlock Text="SMTP password (will be saved; leave blank next time to reuse):" />
+            <PasswordBox Name="SmtpPasswordBox" Margin="0,0,0,8" />
 
             <TextBlock Text="For SMTP2GO you can alternatively use an API key instead of SMTP username/password. If an API key is entered, the password field will be ignored for sending via the API." TextWrapping="Wrap" Margin="0,4,0,4" />
-            <TextBlock Text="SMTP2GO API key (only used when provider is SMTP2GO):" />
-            <PasswordBox Name="Smtp2GoApiKeyBox" Margin="0,0,0,4" />
-            <TextBlock Name="Smtp2GoApiKeyHint" Foreground="Gray" FontStyle="Italic" Margin="0,0,0,8" />
+            <TextBlock Text="SMTP2GO API key (will be saved; leave blank next time to reuse when provider is SMTP2GO):" />
+            <PasswordBox Name="Smtp2GoApiKeyBox" Margin="0,0,0,8" />
           </StackPanel>
         </GroupBox>
 
@@ -168,9 +165,6 @@ function Show-ScaleMonitorConfigWindow {
     $smtpUserBox         = $window.FindName("SmtpUserBox")
     $smtpPasswordBox     = $window.FindName("SmtpPasswordBox")
     $smtp2GoApiKeyBox    = $window.FindName("Smtp2GoApiKeyBox")
-    $clusterPasswordHint = $window.FindName("ClusterPasswordHint")
-    $smtpPasswordHint   = $window.FindName("SmtpPasswordHint")
-    $smtp2GoApiKeyHint   = $window.FindName("Smtp2GoApiKeyHint")
     $notificationBox     = $window.FindName("NotificationIntervalBox")
     $errorTextBlock      = $window.FindName("ErrorText")
     $testEmailButton     = $window.FindName("TestEmailButton")
@@ -237,10 +231,6 @@ function Show-ScaleMonitorConfigWindow {
             $providerGenericRadio.IsChecked = $true
         }
 
-        # Show "(saved - leave blank to use)" when we have encrypted values so user knows they need not re-enter
-        if ($SavedSettings.PasswordEnc)          { $clusterPasswordHint.Text = "(saved - leave blank to use)" }
-        if ($SavedSettings.SmtpPasswordEnc)     { $smtpPasswordHint.Text    = "(saved - leave blank to use)" }
-        if ($SavedSettings.Smtp2GoApiKeyEnc)    { $smtp2GoApiKeyHint.Text   = "(saved - leave blank to use)" }
     }
 
     # Provide sensible defaults if boxes are empty
@@ -753,43 +743,28 @@ while ($true) {
 
                 if (-not $DiskStats.ContainsKey($uuid)) {
                     $DiskStats[$uuid] = [pscustomobject]@{
-                        InitialBytes     = $currentBytes
-                        InitialTime      = $now
-                        NextGBThreshold  = [int]([math]::Ceiling([double]$currentGB / $notificationGbInterval) * $notificationGbInterval)
-                        LastBytes        = $currentBytes
-                        LastChangeTime   = $now
-                        StallAlertSent   = $false
+                        InitialBytes             = $currentBytes
+                        InitialTime              = $now
+                        NextGBThreshold          = [int]([math]::Ceiling([double]$currentGB / $notificationGbInterval) * $notificationGbInterval)
+                        LastBytes                = $currentBytes
+                        LastChangeTime           = $now
+                        StallAlertSent           = $false
+                        LastPercentMilestone     = 0
+                        MilestoneLines           = [System.Collections.ArrayList]@()
+                        UploadStartedEmailSent   = $false
                     }
-                    Send-SmtpNotification -Subject "Upload Started: $name" -Body "Script started monitoring $name. Current progress: $currentGB GB."
                 }
 
                 $stats = $DiskStats[$uuid]
 
-                # Send progress emails at fixed GB boundaries from 0 (e.g. 10, 20, 30, ...),
-                # regardless of when this script was started.
-                if ($totalBytes -gt 0 -and $currentGB -ge $stats.NextGBThreshold) {
-                    $totalGB = [math]::Round($totalBytes / 1GB, 2)
-                    Send-SmtpNotification -Subject "Progress Update: $name" -Body "Disk $name has reached $currentGB GB of $totalGB GB."
-                    $stats.NextGBThreshold += $notificationGbInterval
-                }
-
-                if ($currentBytes -gt $stats.LastBytes) {
-                    $stats.LastBytes = $currentBytes
-                    $stats.LastChangeTime = $now
-                    $stats.StallAlertSent = $false
-                } else {
-                    $timeSinceChange = ($now - $stats.LastChangeTime).TotalMinutes
-                    if ($timeSinceChange -ge 2 -and -not $stats.StallAlertSent) {
-                        Send-SmtpNotification -Subject "STALL ALERT: $name" -Body "Disk $name has not progressed for over 2 minutes. Current position: $currentGB GB."
-                        $stats.StallAlertSent = $true
-                    }
-                }
-
-                # Compute percent and a simple ETA based on average bytes/second since monitoring started.
+                # Compute percent and ETA (and etaSec/completionTime for milestones)
                 $percent = if ($totalBytes -gt 0) { [math]::Min(100, [math]::Round(($currentBytes / $totalBytes) * 100, 1)) } else { 0 }
                 $totalGB = if ($totalBytes -gt 0) { [math]::Round($totalBytes / 1GB, 2) } else { 0 }
 
                 $etaText = $null
+                $etaSec = $null
+                $completionTime = $null
+                $elapsedTs = $now - $stats.InitialTime
                 if ($totalBytes -gt 0 -and $currentBytes -gt $stats.InitialBytes) {
                     $elapsedSec = ($now - $stats.InitialTime).TotalSeconds
                     if ($elapsedSec -gt 0) {
@@ -800,6 +775,7 @@ while ($true) {
                             if ($remainingBytes -gt 0) {
                                 $etaSec = [math]::Round($remainingBytes / $bytesPerSec)
                                 $ts = [TimeSpan]::FromSeconds($etaSec)
+                                $completionTime = $now.AddSeconds($etaSec)
                                 if ($ts.TotalHours -ge 1) {
                                     $etaText = "ETA ~{0:hh\:mm} remaining" -f $ts
                                 } else {
@@ -810,10 +786,52 @@ while ($true) {
                     }
                 }
 
+                # Record 10% milestones: percentage, estimated time to get there, estimated completion time of day at that point
+                $elapsedSec = ($now - $stats.InitialTime).TotalSeconds
+                while ($totalBytes -gt 0 -and $percent -ge ($stats.LastPercentMilestone + 10)) {
+                    $stats.LastPercentMilestone += 10
+                    $milestonePct = $stats.LastPercentMilestone
+                    $elapsedToMilestone = if ($percent -gt 0) { $elapsedSec * ($milestonePct / $percent) } else { 0 }
+                    $completionAtMilestone = $stats.InitialTime.AddSeconds($elapsedToMilestone * (100 / $milestonePct))
+                    $elapsedTsMilestone = [TimeSpan]::FromSeconds($elapsedToMilestone)
+                    $elapsedStr = if ($elapsedTsMilestone.TotalHours -ge 1) { "{0:h\:mm\:ss}" -f $elapsedTsMilestone } else { "{0:mm\:ss}" -f $elapsedTsMilestone }
+                    $etaTimeStr = $completionAtMilestone.ToString("h:mm tt")
+                    [void]$stats.MilestoneLines.Add("  $milestonePct% at $elapsedStr elapsed - ETA $etaTimeStr")
+                }
+
                 $statusBase = "$currentGB GB / $totalGB GB ($percent%)"
                 $status = if ($etaText) { "$statusBase - $etaText" } else { "$statusBase - Calculating ETA..." }
 
-                $statusLines += "$name : $status"
+                # Build full display block (current line + milestone lines) for GUI and emails
+                $diskDisplayLines = @("$name : $status")
+                foreach ($line in $stats.MilestoneLines) { $diskDisplayLines += $line }
+                $diskDisplayText = $diskDisplayLines -join [Environment]::NewLine
+
+                # Send "Upload Started" email on first poll after we have display text
+                if ($stats.MilestoneLines.Count -eq 0 -and -not $stats.UploadStartedEmailSent) {
+                    $stats | Add-Member -NotePropertyName "UploadStartedEmailSent" -NotePropertyValue $true -Force
+                    Send-SmtpNotification -Subject "Upload Started: $name" -Body $diskDisplayText
+                }
+
+                # Send progress emails at fixed GB boundaries
+                if ($totalBytes -gt 0 -and $currentGB -ge $stats.NextGBThreshold) {
+                    Send-SmtpNotification -Subject "Progress Update: $name" -Body $diskDisplayText
+                    $stats.NextGBThreshold += $notificationGbInterval
+                }
+
+                if ($currentBytes -gt $stats.LastBytes) {
+                    $stats.LastBytes = $currentBytes
+                    $stats.LastChangeTime = $now
+                    $stats.StallAlertSent = $false
+                } else {
+                    $timeSinceChange = ($now - $stats.LastChangeTime).TotalMinutes
+                    if ($timeSinceChange -ge 2 -and -not $stats.StallAlertSent) {
+                        Send-SmtpNotification -Subject "STALL ALERT: $name" -Body $diskDisplayText
+                        $stats.StallAlertSent = $true
+                    }
+                }
+
+                foreach ($l in $diskDisplayLines) { $statusLines += $l }
 
                 Write-Progress -Id $progressId -Activity "Monitoring: $name" -Status $status -PercentComplete $percent
             }
